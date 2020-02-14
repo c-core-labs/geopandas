@@ -207,13 +207,15 @@ def _write_to_db(gdf, engine, index, tbl, srid, geom_name, if_exists, chunksize)
 
     # Convert columns to lists and make a generator
     args = [list(gdf[i]) for i in gdf.columns]
+    keys = list(gdf.columns)
     if index:
         args.insert(0, list(gdf.index))
+        if gdf.index.name is None:
+            keys.insert(0, 'index')
+        else:
+            keys.insert(0, gdf.index.name)
 
     data_iter = zip(*args)
-
-    # get list of columns using pandas
-    keys = tbl.insert_data()[0]
     keys = ", ".join('"{}"'.format(k) for k in list(keys))
 
     try:
