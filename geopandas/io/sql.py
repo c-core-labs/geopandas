@@ -181,9 +181,29 @@ def _convert_to_wkb(gdf, geom_name):
     return gdf
 
 
-def _populate_db(gdf, conn, cur, index, tbl):
+def _populate_db(tbl, conn, cur, keys, data_iter):
     import io
     import csv
+
+    s_buf = io.StringIO()
+    writer = csv.writer(s_buf)
+    writer.writerows(data_iter)
+    s_buf.seek(0)
+
+    try:
+
+        sql = "COPY {} ({}) FROM STDIN WITH CSV".format(tbl.table.fullname, keys)
+        cur.copy_expert(sql=sql, file=s_buf)
+        conn.commit()
+
+    except Exception as e:
+        raise e
+
+
+def _write_to_db(gdf, engine, index, tbl, srid, geom_name, if_exists, chunksize):
+
+    conn = engine.raw_connection()
+    cur = conn.cursor()
 
     # Convert columns to lists and make a generator
     args = [list(gdf[i]) for i in gdf.columns]
@@ -194,38 +214,7 @@ def _populate_db(gdf, conn, cur, index, tbl):
 
     # get list of columns using pandas
     keys = tbl.insert_data()[0]
-    columns = ", ".join('"{}"'.format(k) for k in list(keys))
-
-    s_buf = io.StringIO()
-    writer = csv.writer(s_buf)
-    writer.writerows(data_iter)
-    s_buf.seek(0)
-
-    try:
-
-        sql = "COPY {} ({}) FROM STDIN WITH CSV".format(tbl.table.fullname, columns)
-        cur.copy_expert(sql=sql, file=s_buf)
-        conn.commit()
-
-    except Exception as e:
-        raise e
-
-
-def _get_chunks(gdf, chunksize):
-    assert isinstance(
-        chunksize, int
-    ), "'chunksize' should be passed as an integer number."
-    import numpy as np
-
-    chunk_cnt = np.ceil(len(gdf) / chunksize)
-    chunks = np.array_split(gdf, chunk_cnt)
-    return chunks
-
-
-def _write_to_db(gdf, engine, index, tbl, srid, geom_name, if_exists, chunksize):
-
-    conn = engine.raw_connection()
-    cur = conn.cursor()
+    keys = ", ".join('"{}"'.format(k) for k in list(keys))
 
     try:
         # If appending to an existing table, temporarily change
@@ -236,14 +225,13 @@ def _write_to_db(gdf, engine, index, tbl, srid, geom_name, if_exists, chunksize)
             )
             cur.execute(sql)
 
-        if chunksize is None:
-            _populate_db(gdf, conn, cur, index, tbl)
-        else:
-            # Insert in chunks
-            chunks = _get_chunks(gdf, chunksize)
-
-            for chunk in chunks:
-                _populate_db(chunk, conn, cur, index, tbl)
+        tbl.insert(chunksize=chunksize,
+                   method=_populate_db(tbl,
+                                       conn,
+                                       cur,
+                                       keys,
+                                       data_iter)
+                   )
 
         # SRID needs to be updated afterwards as Shapely does not support
         # EWKT/EWKB geometries, see:
